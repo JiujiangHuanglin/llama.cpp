@@ -1,4 +1,8 @@
 # llama.cpp
+> **Note**: This fork contains a personal gfx906 optimization on branch
+> `fattn-tile-skip-continue` (fixed trip count + skip-continue in
+> `ggml-cuda/fattn-tile.cuh`). Gives +15.3% on 64k context for AMD MI60.
+> Base: llama.cpp b11290.
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
