@@ -91,3 +91,30 @@ MMQ_DEBUG=1 ./bin/llama-bench -m model.gguf ...
 | `fb6918c31` | baseline（含 FA skip-continue 优化） |
 | `bfdbb0a69` | MMQ Q8_0 J=128 stream_k (+1.2%) |
 | `5766bfed0` | MMQ_DEBUG 诊断 + 本文档 |
+
+## 实验 5：MMQ Y-tile prefetch（失败，已回滚）
+
+移植自 iacopPBK/llama.cpp-gfx906 的 `mmq-prefetch.cuh`。
+
+### 改动
+
+在 `mmq.cuh` 的 k-loop 里插入：
+```cpp
+#if defined(GGML_USE_HIP) && defined(__gfx906__)
+    int prefetch_y = gfx906_prefetch_y_tile_v4<J, MMQ_TILE_Y_K, nwarps, warp_size>(
+        y, ncols_y, kb0, kb0_stop, qk, blocks_per_iter);
+#endif
+// ... 第二个 vec_dot 后 ...
+#if defined(GGML_USE_HIP) && defined(__gfx906__)
+    gfx906_prefetch_consume(prefetch_y);
+#endif
+结果
+16K Prefill: 403.84 → 403.41 t/s (-0.1%)
+
+在噪声范围内，无收益
+
+原因分析
+软件流水线优化（实验 4）已经把 Y-tile 的 global load 隐藏到寄存器 cache 里，L2 延迟不再是瓶颈。prefetch 想省的那点延迟已经被覆盖，反而增加了指令和寄存器压力。
+
+结论
+回滚。 gfx906 上 MMQ Y-tile prefetch 与软件流水线不叠加，单独用也没意义。
