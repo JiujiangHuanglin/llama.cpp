@@ -4,6 +4,19 @@
 
 #include "mmq.cuh"
 
+// === GFX906 Q8_0 software pipelining ===
+#if defined(GGML_USE_HIP) && defined(__gfx906__)
+#define GFX906_Q8_0_PIPELINE 1
+
+static __device__ __forceinline__ int gfx906_get_int_b2_fast(const void * x, const int & i32) {
+    int x32;
+    memcpy(&x32, (const uint8_t *)x + 4*i32, 4);
+    return x32;
+}
+#else
+#define GFX906_Q8_0_PIPELINE 0
+#endif
+
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_q1_0(
         const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
     constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
@@ -491,6 +504,40 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int kbx  = txi / QI8_0;
     const int kqsx = txi % QI8_0;
 
+#if GFX906_Q8_0_PIPELINE
+    // GFX906: software pipelining + OOB write conflict fix
+    // Original: all OOB threads clamped to i_max -> serialize LDS writes
+    // Fixed: each thread writes to its OWN slot (OOB writes 0)
+    constexpr int loop_iters = I / (nrows * nwarps);
+    constexpr int cache_size = loop_iters > 16 ? 16 : loop_iters;
+    int qs0_cache[cache_size];
+    int qs1_cache[cache_size];
+    int i_slot_cache[cache_size];
+
+#pragma unroll
+    for (int iter = 0; iter < cache_size; iter++) {
+        const int i0 = iter * nrows * nwarps;
+        const int i_slot = i0 + (nrows == 1 ? threadIdx.y : threadIdx.y*nrows + threadIdx.x/threads_per_row);
+        const int i_read = fallback ? min(i_slot, i_max) : i_slot;
+        const bool oob = fallback && (i_slot > i_max);
+        const block_q8_0 * bxi = (const block_q8_0 *) x + kbx0 + i_read*stride + kbx;
+        qs0_cache[iter] = oob ? 0 : gfx906_get_int_b2_fast(bxi[0].qs, kqsx);
+        qs1_cache[iter] = oob ? 0 : gfx906_get_int_b2_fast(bxi[MMQ_TILE_NE_K/QI8_0].qs, kqsx);
+        i_slot_cache[iter] = i_slot;
+    }
+
+#pragma unroll
+    for (int iter = 0; iter < cache_size; iter++) {
+        const int i_slot = i_slot_cache[iter];
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+        x_qs[i_slot*sram_stride + 0             + txi] = qs0_cache[iter];
+        x_qs[i_slot*sram_stride + MMQ_TILE_NE_K + txi] = qs1_cache[iter];
+#else
+        x_qs[i_slot*(2*MMQ_TILE_NE_K + 1) + 0             + txi] = qs0_cache[iter];
+        x_qs[i_slot*(2*MMQ_TILE_NE_K + 1) + MMQ_TILE_NE_K + txi] = qs1_cache[iter];
+#endif
+    }
+#else
 #pragma unroll
     for (int i0 = 0; i0 < I; i0 += nrows*nwarps) {
         int i = i0 + (nrows == 1 ? threadIdx.y : threadIdx.y*nrows + threadIdx.x/threads_per_row);
@@ -509,6 +556,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         x_qs[i*(2*MMQ_TILE_NE_K + 1) + MMQ_TILE_NE_K + txi] = get_int_b2(bxi[MMQ_TILE_NE_K/QI8_0].qs, kqsx);
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     }
+#endif
 
     constexpr int blocks_per_tile_x_row = 2*MMQ_TILE_NE_K / QI8_0;
     constexpr int rows_per_warp = warp_size / blocks_per_tile_x_row;
