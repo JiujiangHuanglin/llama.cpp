@@ -76,10 +76,18 @@ MMQ 侧能做的优化已到极限：
 
 ```bash
 MMQ_DEBUG=1 ./bin/llama-bench -m model.gguf ...
+```
+
 运行时输出：
+
+```
 [MMQ] type=8 J_best=128 ntiles_J_best=32 ncols_opt=4096 smpbo=65536
-关键 commit
-commit	内容
-fb6918c31	baseline（含 FA skip-continue 优化）
-bfdbb0a69	MMQ Q8_0 J=128 stream_k (+1.2%)
-(待提交)	MMQ_DEBUG 诊断
+```
+
+## 关键 commit
+
+| commit | 内容 |
+|---|---|
+| `fb6918c31` | baseline（含 FA skip-continue 优化） |
+| `bfdbb0a69` | MMQ Q8_0 J=128 stream_k (+1.2%) |
+| `5766bfed0` | MMQ_DEBUG 诊断 + 本文档 |
