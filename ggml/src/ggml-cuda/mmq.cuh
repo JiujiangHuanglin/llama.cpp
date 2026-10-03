@@ -4,6 +4,8 @@
 
 #include <climits>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
 #define MMQ_ITER_K             256
@@ -1507,6 +1509,12 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
             J_best = J;
             ntiles_J_best = ntiles_x;
         }
+    }
+
+
+    if (getenv("MMQ_DEBUG")) {
+        fprintf(stderr, "[MMQ] type=%d J_best=%d ntiles_J_best=%d ncols_opt=%ld smpbo=%zu\n",
+                (int)type, J_best, ntiles_J_best, (long)args.ncols_opt, smpbo);
     }
 
     switch (J_best) {
